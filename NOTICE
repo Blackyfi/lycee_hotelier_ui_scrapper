@@ -1,0 +1,45 @@
+Lycée Hôtelier Watcher
+Copyright (C) 2026 Nicolas Thongphao
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option)
+any later version. See the LICENSE file for the full text.
+
+------------------------------------------------------------------------------
+
+This product bundles or runs against a number of third-party software
+components, each distributed under its own license. The list below is a
+human-readable summary; full per-package metadata (including license
+identifiers) is in DEPENDENCIES.md.
+
+  - FastAPI                 — MIT
+  - Starlette               — BSD-3-Clause
+  - Uvicorn                 — BSD-3-Clause
+  - Pydantic / pydantic-settings — MIT
+  - SQLAlchemy              — MIT
+  - Alembic                 — MIT
+  - APScheduler             — MIT
+  - Playwright (Python)     — Apache-2.0
+    (bundles Chromium — BSD-style + others)
+  - httpx                   — BSD-3-Clause
+  - BeautifulSoup4          — MIT
+  - lxml                    — BSD-3-Clause
+  - Jinja2 / MarkupSafe     — BSD-3-Clause
+  - python-dateutil         — Apache-2.0 / BSD-3-Clause (dual)
+  - python-multipart        — Apache-2.0
+  - Tailwind CSS (CDN)      — MIT
+  - HTMX (CDN)              — Zero-Clause BSD
+  - Chart.js (CDN)          — MIT
+
+------------------------------------------------------------------------------
+
+This software has no affiliation with, and no endorsement from:
+
+  - Lycée Hôtelier d'Occitanie / Hôtel Restaurant d'Occitanie
+  - covermanager.com
+  - Google LLC
+
+It is a personal tool that scrapes publicly accessible HTML and is intended
+for individual, non-commercial use. Please respect the upstream sites'
+terms of service and keep polling at a reasonable cadence.
