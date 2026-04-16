@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block title %}Utilisateurs — Lycée Hôtelier{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-semibold mb-4">Abonnés aux notifications</h1>
+
+<div class="mb-4 p-3 rounded-md bg-amber-50 border border-amber-200 text-sm">
+  Les opérations sur les utilisateurs nécessitent l'<code>X-Admin-Token</code>
+  défini dans <code>.env</code>. Saisissez-le ci-dessous (mémorisé en local).
+  <div class="mt-2 flex gap-2">
+    <input id="admin-token" type="password" placeholder="X-Admin-Token"
+           class="flex-1 px-2 py-1 border border-stone-300 rounded">
+    <button onclick="saveToken()" class="px-3 py-1 bg-stone-700 text-white rounded">Sauvegarder</button>
+  </div>
+</div>
+
+<section class="bg-white border border-stone-200 rounded-lg p-4 mb-6">
+  <h2 class="font-semibold mb-3">Ajouter un utilisateur</h2>
+  <form id="create-form" class="grid sm:grid-cols-2 gap-3">
+    <input name="name" placeholder="Nom" required class="border border-stone-300 rounded px-2 py-1.5">
+    <input name="email" type="email" placeholder="email@example.com" required class="border border-stone-300 rounded px-2 py-1.5">
+    <input name="gchat_webhook" placeholder="Google Chat webhook URL (optionnel)" class="border border-stone-300 rounded px-2 py-1.5 sm:col-span-2">
+    <select name="preference" class="border border-stone-300 rounded px-2 py-1.5">
+      <option value="both">Déjeuner + Dîner</option>
+      <option value="lunch">Déjeuner uniquement</option>
+      <option value="dinner">Dîner uniquement</option>
+    </select>
+    <div class="flex items-center gap-4 text-sm">
+      <label class="flex items-center gap-1"><input type="checkbox" name="notify_email" checked> Email</label>
+      <label class="flex items-center gap-1"><input type="checkbox" name="notify_gchat" checked> GChat</label>
+      <label class="flex items-center gap-1"><input type="checkbox" name="daily_reminder" checked> Rappel quotidien</label>
+    </div>
+    <button class="sm:col-span-2 bg-amber-500 text-white py-2 rounded hover:bg-amber-600">Ajouter</button>
+  </form>
+  <div id="create-feedback" class="text-xs mt-2"></div>
+</section>
+
+<section class="bg-white border border-stone-200 rounded-lg p-4">
+  <h2 class="font-semibold mb-3">Utilisateurs</h2>
+  <div id="users-table" class="text-sm">
+    <p class="text-stone-500">Chargement…</p>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const TOKEN_KEY = 'admin-token';
+
+function getToken() { return localStorage.getItem(TOKEN_KEY) || ''; }
+function saveToken() {
+  const v = document.getElementById('admin-token').value.trim();
+  if (v) { localStorage.setItem(TOKEN_KEY, v); document.getElementById('admin-token').value=''; alert('Token sauvegardé.'); refresh(); }
+}
+
+async function api(path, opts={}) {
+  opts.headers = Object.assign({ 'X-Admin-Token': getToken(), 'Content-Type': 'application/json' }, opts.headers || {});
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error(`${r.status}: ${await r.text()}`);
+  if (r.status === 204) return null;
+  return r.json();
+}
+
+function escape(s) { return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+async function refresh() {
+  const tbl = document.getElementById('users-table');
+  try {
+    const users = await api('/api/users');
+    if (!users.length) { tbl.innerHTML = '<p class="text-stone-500">Aucun utilisateur.</p>'; return; }
+    let h = '<table class="w-full"><thead class="text-xs uppercase text-stone-500 border-b"><tr>'
+      + '<th class="text-left py-2">Nom</th><th class="text-left">Email</th><th>Préf.</th>'
+      + '<th>Email</th><th>GChat</th><th>Rappel</th><th>Actif</th>'
+      + '<th class="text-left">Token STOP/START</th><th></th></tr></thead><tbody>';
+    for (const u of users) {
+      h += `<tr class="border-b last:border-0">
+        <td class="py-2">${escape(u.name)}</td>
+        <td class="font-mono text-xs">${escape(u.email)}</td>
+        <td class="text-center">${escape(u.preference)}</td>
+        <td class="text-center">${u.notify_email ? '✓' : '·'}</td>
+        <td class="text-center">${u.notify_gchat ? '✓' : '·'}</td>
+        <td class="text-center">${u.daily_reminder ? '✓' : '·'}</td>
+        <td class="text-center">${u.enabled ? '✓' : '✗'}</td>
+        <td class="font-mono text-xs">
+          <span title="Envoyez 'STOP ${escape(u.command_token)}' depuis n'importe quelle adresse pour arrêter">${escape(u.command_token)}</span>
+          <button onclick="regen(${u.id})" class="ml-1 text-stone-400 hover:text-stone-700" title="Régénérer">↻</button>
+        </td>
+        <td class="text-right">
+          <button onclick="testNotif(${u.id})" class="text-xs text-amber-600 hover:underline">Tester</button>
+          <button onclick="toggleEnabled(${u.id}, ${!u.enabled})" class="text-xs text-stone-600 hover:underline ml-2">
+            ${u.enabled ? 'Désactiver' : 'Activer'}
+          </button>
+          <button onclick="del(${u.id})" class="text-xs text-red-600 hover:underline ml-2">Supprimer</button>
+        </td>
+      </tr>`;
+    }
+    h += '</tbody></table>';
+    tbl.innerHTML = h;
+  } catch (e) {
+    tbl.innerHTML = `<p class="text-red-600 text-sm">Erreur: ${escape(e.message)}</p>`;
+  }
+}
+
+async function testNotif(id) {
+  try {
+    const res = await api(`/api/users/${id}/test-notification`, { method: 'POST', body: '{}' });
+    alert("Test envoyé.\n" + JSON.stringify(res, null, 2));
+  } catch (e) { alert("Erreur: " + e.message); }
+}
+
+async function toggleEnabled(id, enabled) {
+  try { await api(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }); refresh(); }
+  catch (e) { alert("Erreur: " + e.message); }
+}
+
+async function del(id) {
+  if (!confirm("Supprimer cet utilisateur ?")) return;
+  try { await api(`/api/users/${id}`, { method: 'DELETE' }); refresh(); }
+  catch (e) { alert("Erreur: " + e.message); }
+}
+
+async function regen(id) {
+  if (!confirm("Régénérer le token ? Les anciens mails STOP/START cesseront de fonctionner.")) return;
+  try { await api(`/api/users/${id}/regenerate-token`, { method: 'POST', body: '{}' }); refresh(); }
+  catch (e) { alert("Erreur: " + e.message); }
+}
+
+document.getElementById('create-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fb = document.getElementById('create-feedback');
+  const fd = new FormData(e.target);
+  const body = {
+    name: fd.get('name'),
+    email: fd.get('email'),
+    gchat_webhook: fd.get('gchat_webhook') || null,
+    preference: fd.get('preference'),
+    notify_email: fd.get('notify_email') === 'on',
+    notify_gchat: fd.get('notify_gchat') === 'on',
+    daily_reminder: fd.get('daily_reminder') === 'on',
+  };
+  try {
+    await api('/api/users', { method: 'POST', body: JSON.stringify(body) });
+    fb.textContent = 'Utilisateur ajouté.';
+    fb.className = 'text-xs mt-2 text-green-600';
+    e.target.reset();
+    refresh();
+  } catch (err) {
+    fb.textContent = 'Erreur: ' + err.message;
+    fb.className = 'text-xs mt-2 text-red-600';
+  }
+});
+
+refresh();
+</script>
+{% endblock %}
