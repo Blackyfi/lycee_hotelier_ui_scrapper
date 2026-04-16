@@ -12,6 +12,9 @@ moment something opens.
 > Personal/educational tool. Be respectful of the upstream site — keep the poll
 > interval reasonable (default: every 5 minutes).
 
+> See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for diagrams of the schema, module
+> wiring, slot lifecycle, and one-tick runtime flow.
+
 ---
 
 ## Features
