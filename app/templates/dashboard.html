@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}Tableau de bord — Lycée Hôtelier{% endblock %}
+
+{% block content %}
+<div class="grid md:grid-cols-3 gap-4 mb-6">
+  <div class="bg-white border border-stone-200 rounded-lg p-4">
+    <div class="text-xs uppercase tracking-wide text-stone-500">Créneaux ouverts</div>
+    <div class="text-3xl font-semibold mt-1">
+      {% if open_slots %}<span class="text-amber-500 pulse-dot"></span>{% endif %}
+      {{ open_slots|length }}
+    </div>
+  </div>
+  <div class="bg-white border border-stone-200 rounded-lg p-4">
+    <div class="text-xs uppercase tracking-wide text-stone-500">Dernier scan réservations</div>
+    <div class="mt-1 text-sm">
+      {% if last_res %}
+        <span class="font-mono text-stone-700">{{ last_res.started_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC</span>
+        {% if last_res.success %}
+          <span class="ml-1 text-green-600">✓</span>
+        {% else %}
+          <span class="ml-1 text-red-600" title="{{ last_res.error_message or '' }}">✗</span>
+        {% endif %}
+        <div class="text-xs text-stone-500 mt-1">
+          {{ last_res.n_yellow_days }} jours jaunes · {{ last_res.n_new_slots }} nouveaux ·
+          {{ last_res.n_closed_slots }} fermés · {{ last_res.duration_ms or 0 }} ms
+        </div>
+      {% else %}
+        <span class="text-stone-400">aucun scan encore</span>
+      {% endif %}
+    </div>
+  </div>
+  <div class="bg-white border border-stone-200 rounded-lg p-4 flex flex-col justify-between">
+    <div class="text-xs uppercase tracking-wide text-stone-500">Actions</div>
+    <div class="flex gap-2 mt-2">
+      <button onclick="triggerScrape('reservations')"
+              class="px-3 py-1.5 text-sm rounded-md bg-amber-500 text-white hover:bg-amber-600">
+        Forcer un scan
+      </button>
+      <button onclick="triggerScrape('menus')"
+              class="px-3 py-1.5 text-sm rounded-md bg-stone-700 text-white hover:bg-stone-800">
+        Rafraîchir menus
+      </button>
+    </div>
+    <div id="scrape-feedback" class="text-xs mt-2 text-stone-500"></div>
+  </div>
+</div>
+
+{% if address %}
+<section class="bg-white border border-stone-200 rounded-lg p-3 mb-6 flex items-center gap-3">
+  <span class="text-xl">📍</span>
+  <div class="flex-1 text-sm">
+    <div class="font-medium">{{ address }}</div>
+    <div class="text-xs text-stone-500">Adresse synchronisée depuis les mentions légales du site.</div>
+  </div>
+  <a href="{{ maps_url }}" target="_blank"
+     class="text-sm px-3 py-1.5 rounded-md bg-stone-100 hover:bg-stone-200 border border-stone-200">
+    Ouvrir dans Maps ↗
+  </a>
+</section>
+{% endif %}
+
+<section class="bg-white border border-stone-200 rounded-lg p-4 mb-6">
+  <div class="flex items-center justify-between mb-4">
+    <h2 class="text-lg font-semibold">Créneaux disponibles</h2>
+    <a href="{{ settings.reservation_url }}" target="_blank"
+       class="text-sm text-amber-600 hover:underline">Aller réserver ↗</a>
+  </div>
+  {% if not open_slots %}
+    <p class="text-stone-500 text-sm">Aucun créneau ouvert pour le moment. Vous serez notifié dès qu'un créneau s'ouvre.</p>
+  {% else %}
+    <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {% for s in open_slots %}
+        <div class="border border-amber-200 bg-amber-50 rounded-lg p-3">
+          <div class="flex items-baseline justify-between">
+            <div class="font-semibold">
+              {{ s.slot_date.strftime('%a %d %b %Y') }}
+            </div>
+            <div class="text-xs px-2 py-0.5 rounded-full
+                        {% if s.service.value == 'lunch' %}bg-yellow-200{% else %}bg-indigo-200{% endif %}">
+              {{ 'Déjeuner' if s.service.value == 'lunch' else 'Dîner' }}
+            </div>
+          </div>
+          {% if s.times %}
+            <div class="mt-2 flex flex-wrap gap-1">
+              {% for t in s.times %}
+                <span class="text-xs font-mono bg-white px-1.5 py-0.5 rounded border border-amber-200">{{ t }}</span>
+              {% endfor %}
+            </div>
+          {% else %}
+            <div class="mt-2 text-xs text-stone-500">Heures à confirmer sur la page de réservation</div>
+          {% endif %}
+          <div class="mt-2 text-[11px] text-stone-500">
+            Détecté: {{ s.first_seen_at.strftime('%Y-%m-%d %H:%M') }} UTC
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+</section>
+
+<section class="bg-white border border-stone-200 rounded-lg p-4">
+  <div class="flex items-center justify-between mb-4">
+    <h2 class="text-lg font-semibold">Menu de la semaine</h2>
+    <a href="/menus" class="text-sm text-amber-600 hover:underline">Voir tous les menus</a>
+  </div>
+  {% if current_menu %}
+    <div class="text-sm text-stone-600 mb-2">
+      <a href="{{ current_menu.page_url }}" target="_blank" class="hover:underline">
+        {{ current_menu.title }} ↗
+      </a>
+    </div>
+    {% if current_menu.image_filename %}
+      <img src="/menu_image/{{ current_menu.image_filename }}"
+           alt="{{ current_menu.title }}"
+           class="rounded-md border border-stone-200 max-w-full">
+    {% elif current_menu.image_url %}
+      <img src="{{ current_menu.image_url }}" alt="{{ current_menu.title }}"
+           class="rounded-md border border-stone-200 max-w-full">
+    {% else %}
+      <p class="text-stone-500 text-sm">Image du menu pas encore récupérée.</p>
+    {% endif %}
+  {% else %}
+    <p class="text-stone-500 text-sm">Aucun menu trouvé pour le moment.</p>
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  async function triggerScrape(kind) {
+    const fb = document.getElementById('scrape-feedback');
+    const url = kind === 'menus' ? '/api/scrape/menus' : '/api/scrape/reservations';
+    const token = prompt("Admin token (X-Admin-Token):");
+    if (!token) return;
+    fb.textContent = "Lancement…";
+    try {
+      const r = await fetch(url, { method: 'POST', headers: { 'X-Admin-Token': token } });
+      if (r.status === 202) {
+        fb.textContent = "Scan lancé. Rechargez la page dans une minute.";
+      } else {
+        fb.textContent = "Erreur: " + r.status + " " + (await r.text());
+      }
+    } catch (e) {
+      fb.textContent = "Erreur: " + e;
+    }
+  }
+</script>
+{% endblock %}
