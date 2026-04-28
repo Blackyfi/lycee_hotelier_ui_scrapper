@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}Analyse — Lycée Hôtelier{% endblock %}
+
+{% block head_extra %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-semibold mb-4">Analyse</h1>
+
+<div class="grid md:grid-cols-2 gap-4 mb-6">
+  <div class="bg-white border border-stone-200 rounded-lg p-4">
+    <h2 class="font-semibold mb-2">Scans récents</h2>
+    <canvas id="scrapesChart" height="180"></canvas>
+  </div>
+  <div class="bg-white border border-stone-200 rounded-lg p-4">
+    <h2 class="font-semibold mb-2">Durée par scan (ms)</h2>
+    <canvas id="durationChart" height="180"></canvas>
+  </div>
+</div>
+
+<div class="bg-white border border-stone-200 rounded-lg p-4 mb-6">
+  <h2 class="font-semibold mb-2">Ouvertures de créneaux dans le temps</h2>
+  <canvas id="opensChart" height="160"></canvas>
+</div>
+
+<div class="bg-white border border-stone-200 rounded-lg p-4 mb-6">
+  <h2 class="font-semibold mb-2">Historique des scans</h2>
+  <div id="runs-table" class="text-xs overflow-x-auto"></div>
+</div>
+
+<div class="bg-white border border-stone-200 rounded-lg p-4">
+  <h2 class="font-semibold mb-2">Notifications récentes</h2>
+  <div id="notifs-table" class="text-xs overflow-x-auto"></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function j(p) { const r = await fetch(p); return r.ok ? r.json() : []; }
+
+function fmtTime(iso) { return iso ? new Date(iso).toLocaleString() : ''; }
+
+(async function init() {
+  const runs = await j('/api/scrape-runs?limit=200&kind=reservations');
+  runs.reverse(); // chronological
+
+  // Chart 1: scans success/failure
+  new Chart(document.getElementById('scrapesChart'), {
+    type: 'bar',
+    data: {
+      labels: runs.map(r => new Date(r.started_at).toLocaleString()),
+      datasets: [
+        { label: 'Jours jaunes', data: runs.map(r => r.n_yellow_days), backgroundColor: '#f59e0b' },
+        { label: 'Nouveaux', data: runs.map(r => r.n_new_slots), backgroundColor: '#10b981' },
+        { label: 'Fermés', data: runs.map(r => r.n_closed_slots), backgroundColor: '#9ca3af' },
+      ],
+    },
+    options: { scales: { x: { display: false }, y: { beginAtZero: true } }, plugins: { legend: { position: 'bottom' } } },
+  });
+
+  // Chart 2: duration
+  new Chart(document.getElementById('durationChart'), {
+    type: 'line',
+    data: {
+      labels: runs.map(r => new Date(r.started_at).toLocaleString()),
+      datasets: [{
+        label: 'Durée (ms)', data: runs.map(r => r.duration_ms || 0),
+        borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,.15)', tension: 0.25, fill: true,
+      }],
+    },
+    options: { scales: { x: { display: false }, y: { beginAtZero: true } }, plugins: { legend: { display: false } } },
+  });
+
+  // Chart 3: openings over time (slots first_seen_at histogram by day)
+  const slots = await j('/api/slots?only_available=false&since_days=180');
+  const byDay = {};
+  for (const s of slots) {
+    const d = s.first_seen_at.slice(0, 10);
+    byDay[d] = (byDay[d] || 0) + 1;
+  }
+  const days = Object.keys(byDay).sort();
+  new Chart(document.getElementById('opensChart'), {
+    type: 'bar',
+    data: {
+      labels: days,
+      datasets: [{ label: 'Créneaux apparus', data: days.map(d => byDay[d]), backgroundColor: '#f59e0b' }],
+    },
+    options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } },
+  });
+
+  // Runs table
+  const tbl = document.getElementById('runs-table');
+  let h = '<table class="w-full"><thead class="text-stone-500 border-b"><tr>'
+    + '<th class="text-left py-1">Démarré</th><th>Type</th><th>OK</th><th>Jaunes</th>'
+    + '<th>Nouveaux</th><th>Fermés</th><th>Durée</th><th class="text-left">Erreur</th></tr></thead><tbody>';
+  for (const r of [...runs].reverse()) {
+    h += `<tr class="border-b last:border-0">
+      <td class="py-1 font-mono">${fmtTime(r.started_at)}</td>
+      <td class="text-center">${r.kind}</td>
+      <td class="text-center">${r.success ? '✓' : '✗'}</td>
+      <td class="text-center">${r.n_yellow_days}</td>
+      <td class="text-center">${r.n_new_slots}</td>
+      <td class="text-center">${r.n_closed_slots}</td>
+      <td class="text-center font-mono">${r.duration_ms || '-'}</td>
+      <td class="text-red-600">${r.error_message ? r.error_message.substring(0, 80) : ''}</td>
+    </tr>`;
+  }
+  tbl.innerHTML = h + '</tbody></table>';
+
+  // Notifications table
+  const notifs = await j('/api/notifications?limit=200');
+  let nh = '<table class="w-full"><thead class="text-stone-500 border-b"><tr>'
+    + '<th class="text-left py-1">Envoyé</th><th>Slot</th><th>User</th><th>Type</th><th>Canal</th><th>OK</th></tr></thead><tbody>';
+  for (const n of notifs) {
+    nh += `<tr class="border-b last:border-0">
+      <td class="py-1 font-mono">${fmtTime(n.sent_at)}</td>
+      <td class="text-center">#${n.slot_id}</td>
+      <td class="text-center">#${n.user_id}</td>
+      <td class="text-center">${n.kind}</td>
+      <td class="text-center">${n.channel}</td>
+      <td class="text-center">${n.success ? '✓' : '✗'}</td>
+    </tr>`;
+  }
+  document.getElementById('notifs-table').innerHTML = nh + '</tbody></table>';
+})();
+</script>
+{% endblock %}
