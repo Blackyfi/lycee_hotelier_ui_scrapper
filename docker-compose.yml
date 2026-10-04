@@ -4,16 +4,48 @@ services:
     container_name: lycee-scraper
     restart: unless-stopped
     ports:
-      - "${APP_PORT:-8000}:8000"
+      - "127.0.0.1:${APP_PORT:-8765}:8000"
     env_file:
       - .env
     volumes:
       - ./data:/data
     environment:
       DATA_DIR: /data
+    secrets:
+      - db_key
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; urllib.request.urlopen('http://127.0.0.1:8000/healthz').read()"]
+      test: ["CMD", "python", "/app/scripts/healthcheck.py"]
       interval: 30s
       timeout: 5s
       retries: 5
       start_period: 30s
+    networks:
+      - lycee-network
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: lycee-caddy
+    restart: unless-stopped
+    ports:
+      - "${HTTPS_PORT:-8767}:8443"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      LOCAL_HOST: ${LOCAL_HOST:-gx10-d4bc}
+    networks:
+      - lycee-network
+
+secrets:
+  # SQLCipher key (64 hex chars), mode 600, owned by uid 1000. Kept outside ./data so a
+  # copy of the data dir or its backups is useless without it.
+  db_key:
+    file: ./secrets/db_key
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  lycee-network:
