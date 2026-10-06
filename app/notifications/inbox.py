@@ -10,6 +10,7 @@ put the command in the subject. Each user has a unique `command_token` issued
 at create-time; it's printed in the email footer so subscribers can opt-out
 without the dashboard needing to be reachable from the public internet.
 """
+
 from __future__ import annotations
 
 import email
@@ -17,6 +18,7 @@ import imaplib
 import logging
 import re
 import smtplib
+from email.header import decode_header, make_header
 from email.message import EmailMessage
 from email.utils import formataddr, parseaddr
 from threading import Lock
@@ -24,6 +26,7 @@ from threading import Lock
 from ..config import get_settings
 from ..db import session_scope
 from ..models import User
+from ..scraper.dispatcher import send_welcome_calendar
 
 log = logging.getLogger(__name__)
 
@@ -37,7 +40,6 @@ def _extract_subject(msg: email.message.Message) -> str:
     literal `STOP <token>` line — parsing the body would cause false positives."""
     raw = msg.get("Subject") or ""
     try:
-        from email.header import decode_header, make_header
         return str(make_header(decode_header(raw)))
     except Exception:
         return raw
@@ -55,16 +57,20 @@ def _send_confirmation(to_email: str, action: str, user_name: str) -> None:
     app_password = "".join(settings.gmail_app_password.split())
     if action == "STOP":
         subject = "[Lycée Hôtelier] Notifications désactivées"
-        body = (f"Bonjour {user_name},\n\n"
-                "Vos notifications sont maintenant désactivées.\n"
-                "Pour les réactiver, envoyez un nouvel email dont le sujet contient "
-                "`START <votre token>`.\n")
+        body = (
+            f"Bonjour {user_name},\n\n"
+            "Vos notifications sont maintenant désactivées.\n"
+            "Pour les réactiver, envoyez un nouvel email dont le sujet contient "
+            "`START <votre token>`.\n"
+        )
     else:
         subject = "[Lycée Hôtelier] Notifications réactivées"
-        body = (f"Bonjour {user_name},\n\n"
-                "Vos notifications sont à nouveau actives.\n"
-                "Pour les arrêter, envoyez un nouvel email dont le sujet contient "
-                "`STOP <votre token>`.\n")
+        body = (
+            f"Bonjour {user_name},\n\n"
+            "Vos notifications sont à nouveau actives.\n"
+            "Pour les arrêter, envoyez un nouvel email dont le sujet contient "
+            "`STOP <votre token>`.\n"
+        )
 
     msg = EmailMessage()
     msg["From"] = formataddr((settings.gmail_from_name, settings.gmail_username))
@@ -109,7 +115,8 @@ def poll_inbox() -> dict:
 
             for msg_id in ids:
                 try:
-                    typ, msg_data = imap.fetch(msg_id, "(RFC822)")
+                    # BODY.PEEK: a plain RFC822 fetch would mark every message read, including non-commands
+                    typ, msg_data = imap.fetch(msg_id, "(BODY.PEEK[])")
                     if typ != "OK" or not msg_data or not msg_data[0]:
                         continue
                     raw = msg_data[0][1]
@@ -126,8 +133,8 @@ def poll_inbox() -> dict:
                     applied = _apply_command(action, token, from_addr)
                     if applied:
                         counts["applied"] += 1
-                        # mark seen so we don't re-process
-                        imap.store(msg_id, "+FLAGS", "\\Seen")
+                    # mark every command seen (unknown tokens too) so we don't re-process it each poll
+                    imap.store(msg_id, "+FLAGS", "\\Seen")
                 except Exception:
                     counts["errors"] += 1
                     log.exception("error processing imap message id=%s", msg_id)
@@ -141,19 +148,40 @@ def poll_inbox() -> dict:
 
 
 def _apply_command(action: str, token: str, from_addr: str) -> bool:
-    """Find the user by token, toggle enabled, send confirmation. Returns True on success."""
+    """Find the user by token, toggle enabled, send confirmation. Returns True on success.
+
+    A START that actually re-enables the user also sends them the welcome calendar."""
+    restarted_id: int | None = None
     with session_scope() as s:
         user = s.query(User).filter(User.command_token == token).one_or_none()
         if user is None:
-            log.warning("imap command %s with unknown token=%s from=%s", action, token, from_addr)
+            log.warning(
+                "imap command %s with unknown token=%s from=%s",
+                action,
+                token,
+                from_addr,
+            )
             return False
         wanted = action == "START"
         if user.enabled == wanted:
-            log.info("imap command %s for user=%s — already in target state", action, user.email)
+            log.info(
+                "imap command %s for user=%s — already in target state",
+                action,
+                user.email,
+            )
         else:
             user.enabled = wanted
-            log.info("imap command %s applied to user=%s (from=%s)", action, user.email, from_addr)
+            if wanted:
+                restarted_id = user.id
+            log.info(
+                "imap command %s applied to user=%s (from=%s)",
+                action,
+                user.email,
+                from_addr,
+            )
         # Reply to the from-address if present, else to the user's registered email.
         reply_to = from_addr or user.email
         _send_confirmation(reply_to, action, user.name)
-        return True
+    if restarted_id is not None:
+        send_welcome_calendar(restarted_id)  # after commit, so it sees enabled=True
+    return True
