@@ -1,7 +1,9 @@
 """APScheduler integration."""
+
 from __future__ import annotations
 
 import logging
+import time
 from threading import Lock
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -10,6 +12,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from ..config import get_settings
 from ..notifications.inbox import poll_inbox
+from ..runtime_settings import get_scrape_interval_minutes
 from .dispatcher import run_reservation_scrape
 from .menus import scrape_menus
 
@@ -18,6 +21,7 @@ log = logging.getLogger(__name__)
 _scheduler: BackgroundScheduler | None = None
 _res_lock = Lock()
 _menu_lock = Lock()
+_RESERVATION_JOB_ID = "reservation_scrape"
 
 
 def _safe_inbox_job() -> None:
@@ -58,19 +62,19 @@ def start_scheduler() -> BackgroundScheduler:
 
     s = get_settings()
     sched = BackgroundScheduler(timezone=s.tz)
+    scrape_interval_minutes = get_scrape_interval_minutes()
 
     sched.add_job(
         _safe_reservation_job,
-        IntervalTrigger(minutes=s.scrape_interval_minutes),
-        id="reservation_scrape",
-        next_run_time=None,
+        IntervalTrigger(minutes=scrape_interval_minutes),
+        id=_RESERVATION_JOB_ID,
         max_instances=1,
         coalesce=True,
         misfire_grace_time=60,
     )
     sched.add_job(
         _safe_menu_job,
-        CronTrigger(hour=s.daily_reminder_hour, minute=5, timezone=s.tz),
+        CronTrigger(hour=s.daily_menu_scrape_hour, minute=5, timezone=s.tz),
         id="menu_scrape_daily",
         max_instances=1,
         coalesce=True,
@@ -92,9 +96,12 @@ def start_scheduler() -> BackgroundScheduler:
 
     sched.start()
     _scheduler = sched
-    log.info("scheduler started (poll=%s min, lookahead=%s months, imap=%s)",
-             s.scrape_interval_minutes, s.lookahead_months,
-             f"every {s.imap_poll_interval_minutes} min" if s.imap_enabled else "disabled")
+    log.info(
+        "scheduler started (poll=%s min, lookahead=%s months, imap=%s)",
+        scrape_interval_minutes,
+        s.lookahead_months,
+        f"every {s.imap_poll_interval_minutes} min" if s.imap_enabled else "disabled",
+    )
     return sched
 
 
@@ -108,13 +115,25 @@ def shutdown_scheduler() -> None:
 def force_reservation_scrape() -> None:
     """Trigger a one-shot reservation scrape outside the regular interval."""
     if _scheduler:
-        _scheduler.add_job(_safe_reservation_job, id=f"force_res_{__import__('time').time_ns()}")
+        _scheduler.add_job(_safe_reservation_job, id=f"force_res_{time.time_ns()}")
     else:
         _safe_reservation_job()
 
 
 def force_menu_scrape() -> None:
     if _scheduler:
-        _scheduler.add_job(_safe_menu_job, id=f"force_menu_{__import__('time').time_ns()}")
+        _scheduler.add_job(_safe_menu_job, id=f"force_menu_{time.time_ns()}")
     else:
         _safe_menu_job()
+
+
+def update_scrape_interval(minutes: int) -> None:
+    job = _scheduler.get_job(_RESERVATION_JOB_ID) if _scheduler else None
+    if job is None:
+        log.info(
+            "reservation scrape interval updated to %s min (scheduler not running)",
+            minutes,
+        )
+        return
+    job.reschedule(trigger=IntervalTrigger(minutes=minutes))
+    log.info("reservation scrape interval updated to %s min", minutes)

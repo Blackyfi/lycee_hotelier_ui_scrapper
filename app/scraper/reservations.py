@@ -1,12 +1,15 @@
 """Scrape the covermanager Angular calendar for available days/services/times."""
+
 from __future__ import annotations
 
 import logging
 import re
+import time
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
-from playwright.sync_api import Page, TimeoutError as PWTimeout, sync_playwright
+from playwright.sync_api import Page, sync_playwright
+from playwright.sync_api import TimeoutError as PWTimeout
 
 from ..config import get_settings
 from ..models import Service
@@ -80,10 +83,7 @@ def _click_next_month(page: Page) -> bool:
 
 def _click_day(page: Page, target: date) -> bool:
     """Click a specific day cell. Returns True if click landed."""
-    sel = (
-        f"td.disponibility[data-handler='selectDay']"
-        f"[data-month='{target.month - 1}'][data-year='{target.year}']"
-    )
+    sel = f"td.disponibility[data-handler='selectDay'][data-month='{target.month - 1}'][data-year='{target.year}']"
     cells = page.locator(sel)
     n = cells.count()
     for i in range(n):
@@ -149,10 +149,9 @@ def _read_services_for_day(page: Page) -> dict[Service, list[str]]:
     return out
 
 
-def scrape_reservations() -> tuple[list[ScrapedSlot], dict]:
-    """Scrape the covermanager calendar. Returns (slots, summary)."""
+def _run_playwright_session() -> tuple[list[ScrapedSlot], dict]:
+    """Run one Playwright browser session. Raises on unrecoverable failure."""
     settings = get_settings()
-    started = datetime.now(timezone.utc)
     summary: dict = {"yellow_days": 0, "months_visited": 0, "errors": []}
     slots: list[ScrapedSlot] = []
     seen_dates: set[date] = set()
@@ -169,16 +168,18 @@ def scrape_reservations() -> tuple[list[ScrapedSlot], dict]:
             locale="fr-FR",
             viewport={"width": 1280, "height": 1600},
             user_agent=(
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/130.0 Safari/537.36"
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
             ),
         )
         page = ctx.new_page()
         try:
             # SPAs often never reach "networkidle" (constant polling) — use DCL and rely on
             # our explicit calendar wait below.
-            page.goto(settings.reservation_url, timeout=settings.playwright_timeout_ms,
-                      wait_until="domcontentloaded")
+            page.goto(
+                settings.reservation_url,
+                timeout=settings.playwright_timeout_ms,
+                wait_until="domcontentloaded",
+            )
             _wait_for_calendar(page, max(settings.playwright_timeout_ms, 30_000))
 
             for step in range(max_clicks):
@@ -196,10 +197,11 @@ def scrape_reservations() -> tuple[list[ScrapedSlot], dict]:
                                     for svc, times in services.items():
                                         slots.append(ScrapedSlot(d, svc, tuple(times)))
                                 else:
-                                    # Couldn't determine service → record both as unknown? Default lunch+dinner false.
-                                    log.info("no service block found for %s, recording as lunch+dinner empty", d)
-                                    slots.append(ScrapedSlot(d, Service.LUNCH, ()))
-                                    slots.append(ScrapedSlot(d, Service.DINNER, ()))
+                                    log.warning(
+                                        "no service block found for %s; skipping slot creation",
+                                        d,
+                                    )
+                                    summary["errors"].append(f"{d.isoformat()}: no service block found")
                         except Exception as e:
                             log.warning("day detail failed for %s: %s", d, e)
                             summary["errors"].append(f"{d.isoformat()}: {e!r}")
@@ -219,5 +221,21 @@ def scrape_reservations() -> tuple[list[ScrapedSlot], dict]:
             ctx.close()
             browser.close()
 
-    summary["duration_ms"] = int((datetime.now(timezone.utc) - started).total_seconds() * 1000)
     return slots, summary
+
+
+def scrape_reservations() -> tuple[list[ScrapedSlot], dict]:
+    """Scrape the covermanager calendar. Returns (slots, summary)."""
+    started = datetime.now(UTC)
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            slots, summary = _run_playwright_session()
+            summary["duration_ms"] = int((datetime.now(UTC) - started).total_seconds() * 1000)
+            return slots, summary
+        except Exception as e:
+            last_exc = e
+            log.warning("reservation scrape attempt %d/3 failed: %s", attempt + 1, e)
+            if attempt < 2:
+                time.sleep(5 * (attempt + 1))
+    raise last_exc  # type: ignore[misc]
