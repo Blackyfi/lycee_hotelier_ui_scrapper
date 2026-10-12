@@ -1,8 +1,13 @@
 """Reconcile scraped slots against DB state and dispatch notifications."""
+
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timezone
+from dataclasses import replace
+from datetime import UTC, date, datetime
+from email.utils import make_msgid
+from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
@@ -10,6 +15,7 @@ from ..config import get_settings
 from ..db import session_scope
 from ..models import (
     AvailableSlot,
+    MenuDay,
     NotificationKind,
     NotificationSent,
     Preference,
@@ -18,9 +24,10 @@ from ..models import (
     Service,
     User,
 )
-from ..notifications.gchat import send_gchat
+from ..notifications.gchat import post_gchat, send_gchat
 from ..notifications.gmail import send_email
 from ..notifications.payload import NotifPayload, SlotInfo
+from ..notifications.welcome import CalSlot, WelcomeCalendar, pick_gif
 from .reservations import ScrapedSlot, scrape_reservations
 
 log = logging.getLogger(__name__)
@@ -34,31 +41,80 @@ def _user_wants_service(user: User, service: Service) -> bool:
     return user.preference.value == service.value
 
 
-def _slot_to_info(slot: AvailableSlot) -> SlotInfo:
-    return SlotInfo(slot_date=slot.slot_date, service=slot.service, times=tuple(slot.times))
+def _slot_infos(session: Session, slots: list[AvailableSlot]) -> tuple[SlotInfo, ...]:
+    """SlotInfo per slot, with that service's dishes when the menu PDF covers it."""
+    dates = {s.slot_date for s in slots}
+    menus = {(m.menu_date, m.service): m for m in session.query(MenuDay).filter(MenuDay.menu_date.in_(dates))}
+    out = []
+    for s in slots:
+        m = menus.get((s.slot_date, s.service))
+        out.append(
+            SlotInfo(
+                slot_date=s.slot_date,
+                service=s.service,
+                times=tuple(s.times),
+                dishes=tuple(m.dishes) if m else (),
+                menu_url=m.source_url if m else None,
+            )
+        )
+    return tuple(out)
 
 
 def _restaurant_location(session: Session) -> tuple[str | None, str | None]:
     """Return (address, maps_url) from the scraped RestaurantInfo, if any."""
-    from urllib.parse import quote
     row = session.query(RestaurantInfo).first()
     if not row or not row.address:
         return None, None
-    return row.address, f"https://www.google.com/maps/search/?api=1&query={quote(row.address)}"
+    return (
+        row.address,
+        f"https://www.google.com/maps/search/?api=1&query={quote(row.address)}",
+    )
 
 
-def _send_batch(session: Session, user: User, slots: list[AvailableSlot],
-                kind: NotificationKind, booking_url: str) -> None:
+def _local_today() -> date:
+    tz = ZoneInfo(get_settings().tz)
+    return datetime.now(tz).date()
+
+
+def _record(
+    session: Session,
+    user: User,
+    slots: list[AvailableSlot],
+    kind: NotificationKind,
+    channel: str,
+    ok: bool,
+    err: str | None,
+) -> None:
+    sent_day = _local_today()
+    for s in slots:
+        session.add(
+            NotificationSent(
+                user_id=user.id,
+                slot_id=s.id,
+                kind=kind,
+                channel=channel,
+                sent_day=sent_day,
+                success=ok,
+                error_message=err,
+            )
+        )
+
+
+def _send_batch(
+    session: Session,
+    user: User,
+    slots: list[AvailableSlot],
+    kind: NotificationKind,
+    booking_url: str,
+) -> None:
     """Send one notification per channel covering all given slots; record per-slot rows."""
     if not slots:
         return
     address, maps_url = _restaurant_location(session)
     payload = NotifPayload(
         kind=kind,
-        slots=tuple(_slot_to_info(s) for s in slots),
+        slots=_slot_infos(session, slots),
         booking_url=booking_url,
-        # email dropped this; gchat keeps it
-        dashboard_url=None,
         unsubscribe_token=user.command_token,
         address=address,
         maps_url=maps_url,
@@ -66,57 +122,89 @@ def _send_batch(session: Session, user: User, slots: list[AvailableSlot],
 
     if user.notify_email and user.email:
         ok, err = send_email(user.email, payload)
-        for s in slots:
-            session.add(NotificationSent(
-                user_id=user.id, slot_id=s.id, kind=kind, channel="email",
-                success=ok, error_message=err,
-            ))
+        _record(session, user, slots, kind, "email", ok, err)
 
     if user.notify_gchat and user.gchat_webhook:
-        # GChat card may include the dashboard link if useful — keep it for chat only
-        gchat_payload = NotifPayload(
-            kind=kind,
-            slots=payload.slots,
-            booking_url=payload.booking_url,
-            dashboard_url=f"http://localhost:{get_settings().app_port}/",
-            address=address,
-            maps_url=maps_url,
-        )
-        ok, err = send_gchat(user.gchat_webhook, gchat_payload)
-        for s in slots:
-            session.add(NotificationSent(
-                user_id=user.id, slot_id=s.id, kind=kind, channel="gchat",
-                success=ok, error_message=err,
-            ))
+        ok, err = send_gchat(user.gchat_webhook, replace(payload, unsubscribe_token=None))
+        _record(session, user, slots, kind, "gchat", ok, err)
 
 
-def _already_sent_today(session: Session, user_id: int, slot_id: int,
-                        kind: NotificationKind, day: date) -> bool:
-    return session.query(NotificationSent).filter(
-        NotificationSent.user_id == user_id,
-        NotificationSent.slot_id == slot_id,
-        NotificationSent.kind == kind,
-        NotificationSent.sent_day == day,
-        NotificationSent.success.is_(True),
-    ).first() is not None
+def send_welcome_calendar(user_id: int) -> dict:
+    """Send a new (or returning) subscriber everything bookable from today onward.
+
+    Sends nothing when no slot is open. Afterwards the user only gets the usual alerts, which
+    fire on transitions, so the slots listed here are never re-announced while they stay open.
+    """
+    settings = get_settings()
+    try:
+        with session_scope() as session:
+            user = session.get(User, user_id)
+            if user is None or not user.enabled:
+                return {"sent": False, "reason": "user missing or disabled"}
+            rows = sorted(
+                (
+                    s
+                    for s in session.query(AvailableSlot).filter(AvailableSlot.slot_date >= _local_today()).all()
+                    if _user_wants_service(user, s.service)
+                ),
+                key=lambda s: (s.slot_date, s.service != Service.LUNCH),  # lunch before dinner
+            )
+            open_rows = [s for s in rows if s.is_currently_available]
+            if not open_rows:
+                log.info("welcome calendar skipped for user=%s: nothing bookable", user.id)
+                return {"sent": False, "reason": "nothing bookable"}
+
+            address, maps_url = _restaurant_location(session)
+            services = (
+                (Service.LUNCH, Service.DINNER)
+                if user.preference in (Preference.BOTH, Preference.ANY)
+                else (Service(user.preference.value),)
+            )
+            cal = WelcomeCalendar(
+                name=user.name,
+                today=_local_today(),
+                slots=tuple(CalSlot(s.slot_date, s.service, tuple(s.times), s.is_currently_available) for s in rows),
+                booking_url=settings.reservation_url,
+                unsubscribe_token=user.command_token,
+                address=address,
+                maps_url=maps_url,
+                services=services,
+            )
+
+            results: dict = {"sent": True}
+            send_mail = user.notify_email and bool(user.email)
+            if send_mail:
+                gif = pick_gif()
+                cid = make_msgid(domain="lycee-hotelier")[1:-1] if gif else None
+                ok, err = send_email(user.email, replace(cal, gif_cid=cid), {cid: gif} if gif else None)
+                _record(session, user, open_rows, NotificationKind.WELCOME, "email", ok, err)
+                results["email"] = {"sent": ok, "error": err, "gif": gif.name if gif else None}
+            if user.notify_gchat and user.gchat_webhook:
+                ok, err = post_gchat(user.gchat_webhook, cal.gchat_message(email_also_sent=send_mail))
+                _record(session, user, open_rows, NotificationKind.WELCOME, "gchat", ok, err)
+                results["gchat"] = {"sent": ok, "error": err}
+            log.info("welcome calendar for user=%s: %s", user.id, results)
+            return results
+    except Exception:
+        log.exception("welcome calendar failed for user=%s", user_id)
+        return {"sent": False, "reason": "error"}
 
 
 def reconcile_and_notify(scraped: list[ScrapedSlot]) -> dict:
     """Apply scraped state to DB and dispatch notifications. Returns counts."""
     settings = get_settings()
-    today = datetime.now(timezone.utc).date()
-    counts = {"new_open": 0, "closed": 0, "reminders": 0, "still_open": 0,
-              "batches_sent": 0}
-
-    scraped_map: dict[tuple[date, Service], tuple[str, ...]] = {
-        (s.slot_date, s.service): s.times for s in scraped
+    counts = {
+        "new_open": 0,
+        "closed": 0,
+        "still_open": 0,
+        "batches_sent": 0,
     }
+
+    scraped_map: dict[tuple[date, Service], tuple[str, ...]] = {(s.slot_date, s.service): s.times for s in scraped}
 
     with session_scope() as session:
         currently_open: list[AvailableSlot] = (
-            session.query(AvailableSlot)
-            .filter(AvailableSlot.is_currently_available.is_(True))
-            .all()
+            session.query(AvailableSlot).filter(AvailableSlot.is_currently_available.is_(True)).all()
         )
         users: list[User] = session.query(User).filter(User.enabled.is_(True)).all()
 
@@ -125,12 +213,11 @@ def reconcile_and_notify(scraped: list[ScrapedSlot]) -> dict:
             key = (db_slot.slot_date, db_slot.service)
             if key not in scraped_map:
                 db_slot.is_currently_available = False
-                db_slot.closed_at = datetime.now(timezone.utc)
+                db_slot.closed_at = datetime.now(UTC)
                 counts["closed"] += 1
 
         # 2. Process scraped slots — accumulate, don't dispatch yet
         newly_open: list[AvailableSlot] = []
-        still_open: list[AvailableSlot] = []
 
         for (sdate, svc), times in scraped_map.items():
             existing = (
@@ -149,7 +236,7 @@ def reconcile_and_notify(scraped: list[ScrapedSlot]) -> dict:
             else:
                 was_closed = not existing.is_currently_available
                 existing.is_currently_available = True
-                existing.last_seen_at = datetime.now(timezone.utc)
+                existing.last_seen_at = datetime.now(UTC)
                 existing.closed_at = None
                 if list(times):
                     existing.times = list(times)
@@ -158,34 +245,26 @@ def reconcile_and_notify(scraped: list[ScrapedSlot]) -> dict:
                     newly_open.append(existing)
                 else:
                     counts["still_open"] += 1
-                    still_open.append(existing)
 
-        # 3. Dispatch — one batched notification per user per kind
+        # 3. Dispatch — one batched notification per user for newly-opened slots
         for u in users:
             user_new = [s for s in newly_open if _user_wants_service(u, s.service)]
             if user_new:
-                _send_batch(session, u, user_new, NotificationKind.OPEN, settings.reservation_url)
+                _send_batch(
+                    session,
+                    u,
+                    user_new,
+                    NotificationKind.OPEN,
+                    settings.reservation_url,
+                )
                 counts["batches_sent"] += 1
-
-            if u.daily_reminder:
-                user_rem = [
-                    s for s in still_open
-                    if _user_wants_service(u, s.service)
-                    and not _already_sent_today(session, u.id, s.id,
-                                                 NotificationKind.REMINDER, today)
-                ]
-                if user_rem:
-                    _send_batch(session, u, user_rem, NotificationKind.REMINDER,
-                                settings.reservation_url)
-                    counts["reminders"] += len(user_rem)
-                    counts["batches_sent"] += 1
 
     return counts
 
 
 def run_reservation_scrape() -> dict:
     """Top-level: scrape, reconcile, persist run record. Safe to call from scheduler."""
-    started = datetime.now(timezone.utc)
+    started = datetime.now(UTC)
     error: str | None = None
     counts: dict = {}
     summary: dict = {}
@@ -196,17 +275,19 @@ def run_reservation_scrape() -> dict:
         log.exception("reservation scrape failed")
         error = str(e)
     finally:
-        finished = datetime.now(timezone.utc)
+        finished = datetime.now(UTC)
         with session_scope() as s:
-            s.add(ScrapeRun(
-                kind="reservations",
-                started_at=started,
-                finished_at=finished,
-                success=error is None,
-                error_message=error,
-                n_yellow_days=summary.get("yellow_days", 0) if isinstance(summary, dict) else 0,
-                n_new_slots=counts.get("new_open", 0),
-                n_closed_slots=counts.get("closed", 0),
-                duration_ms=int((finished - started).total_seconds() * 1000),
-            ))
+            s.add(
+                ScrapeRun(
+                    kind="reservations",
+                    started_at=started,
+                    finished_at=finished,
+                    success=error is None,
+                    error_message=error,
+                    n_yellow_days=summary.get("yellow_days", 0) if isinstance(summary, dict) else 0,
+                    n_new_slots=counts.get("new_open", 0),
+                    n_closed_slots=counts.get("closed", 0),
+                    duration_ms=int((finished - started).total_seconds() * 1000),
+                )
+            )
     return {"summary": summary, "counts": counts, "error": error}
