@@ -4,20 +4,36 @@ import logging
 import smtplib
 from email.message import EmailMessage
 from email.utils import formataddr
+from pathlib import Path
+from typing import Protocol
 
 from ..config import get_settings
-from .payload import NotifPayload
 
 log = logging.getLogger(__name__)
 
 
-def send_email(to_email: str, payload: NotifPayload) -> tuple[bool, str | None]:
+class EmailContent(Protocol):
+    @property
+    def subject(self) -> str: ...
+    def text(self) -> str: ...
+    def html(self) -> str: ...
+
+
+def send_email(
+    to_email: str,
+    payload: EmailContent,
+    inline_gifs: dict[str, Path] | None = None,
+) -> tuple[bool, str | None]:
+    """Send payload as text + HTML. inline_gifs maps Content-ID → file, referenced as cid:<id> in the HTML."""
     settings = get_settings()
     if settings.notifications_dry_run:
         log.info("[DRY-RUN email] to=%s subject=%s", to_email, payload.subject)
         return True, None
     if not settings.gmail_username or not settings.gmail_app_password:
-        return False, "Gmail credentials not configured (GMAIL_USERNAME / GMAIL_APP_PASSWORD)"
+        return (
+            False,
+            "Gmail credentials not configured (GMAIL_USERNAME / GMAIL_APP_PASSWORD)",
+        )
 
     # Google displays app passwords as "xxxx xxxx xxxx xxxx" for readability; SMTP
     # wants the 16 chars contiguous. Strip all whitespace so either format works.
@@ -29,6 +45,12 @@ def send_email(to_email: str, payload: NotifPayload) -> tuple[bool, str | None]:
     msg["Subject"] = payload.subject
     msg.set_content(payload.text())
     msg.add_alternative(payload.html(), subtype="html")
+    if inline_gifs:
+        html_part = msg.get_payload()[1]
+        for cid, path in inline_gifs.items():
+            html_part.add_related(
+                path.read_bytes(), maintype="image", subtype="gif", cid=f"<{cid}>", filename=path.name
+            )
 
     try:
         with smtplib.SMTP(settings.gmail_smtp_host, settings.gmail_smtp_port, timeout=20) as smtp:
