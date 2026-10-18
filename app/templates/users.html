@@ -1,6 +1,32 @@
 {% extends "base.html" %}
 {% block title %}Utilisateurs — Lycée Hôtelier{% endblock %}
 
+{% block head_extra %}
+<style>
+  /* "?" help bubbles: open on hover, keyboard focus or tap (tabindex makes it focusable on mobile). */
+  .help {
+    position: relative; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; border-radius: 9999px;
+    background: #e7e5e4; color: #57534e;
+    font-size: 12px; font-weight: 600; cursor: help; user-select: none;
+  }
+  .help:hover, .help:focus, .help:focus-within { background: #f59e0b; color: #fff; outline: none; }
+  .help .tip {
+    display: none; position: absolute; z-index: 30; top: calc(100% + 8px); right: 0;
+    width: min(340px, calc(100vw - 32px));
+    background: #1c1917; color: #fafaf9; border-radius: 8px; padding: 10px 12px;
+    font-size: 12px; font-weight: 400; line-height: 1.5; text-align: left; cursor: auto;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);
+  }
+  .help:hover .tip, .help:focus .tip, .help:focus-within .tip { display: block; }
+  .help .tip b { color: #fcd34d; font-weight: 600; }
+  .help .tip ol { list-style: decimal; padding-left: 1.2em; margin: 4px 0; }
+  .help .tip a { color: #fcd34d; text-decoration: underline; }
+  .help .tip code { background: #44403c; padding: 0 3px; border-radius: 3px; word-break: break-all; }
+</style>
+{% endblock %}
+
 {% block content %}
 <h1 class="text-2xl font-semibold mb-4">Abonnés aux notifications</h1>
 
@@ -15,20 +41,82 @@
 </div>
 
 <section class="bg-white border border-stone-200 rounded-lg p-4 mb-6">
+  <h2 class="font-semibold mb-3">Réglages du polling</h2>
+  <form id="polling-form" class="flex flex-col sm:flex-row sm:items-end gap-3">
+    <label class="flex-1 text-sm">
+      <span class="block text-stone-600 mb-1">Intervalle de scan des réservations (minutes)</span>
+      <input id="scrape-interval-minutes" name="scrape_interval_minutes" type="number" min="1" max="1440" required
+             class="w-full border border-stone-300 rounded px-2 py-1.5">
+    </label>
+    <button class="bg-amber-500 text-white py-2 px-4 rounded hover:bg-amber-600">Enregistrer</button>
+  </form>
+  <div class="text-xs text-stone-500 mt-2">Le nouveau rythme est appliqué immédiatement au poller en cours.</div>
+  <div id="polling-feedback" class="text-xs mt-2"></div>
+</section>
+
+<section class="bg-white border border-stone-200 rounded-lg p-4 mb-6">
   <h2 class="font-semibold mb-3">Ajouter un utilisateur</h2>
   <form id="create-form" class="grid sm:grid-cols-2 gap-3">
-    <input name="name" placeholder="Nom" required class="border border-stone-300 rounded px-2 py-1.5">
-    <input name="email" type="email" placeholder="email@example.com" required class="border border-stone-300 rounded px-2 py-1.5">
-    <input name="gchat_webhook" placeholder="Google Chat webhook URL (optionnel)" class="border border-stone-300 rounded px-2 py-1.5 sm:col-span-2">
-    <select name="preference" class="border border-stone-300 rounded px-2 py-1.5">
-      <option value="both">Déjeuner + Dîner</option>
-      <option value="lunch">Déjeuner uniquement</option>
-      <option value="dinner">Dîner uniquement</option>
-    </select>
+    <div class="flex items-center gap-2">
+      <input name="name" placeholder="Nom" required class="flex-1 min-w-0 border border-stone-300 rounded px-2 py-1.5">
+      <span class="help" tabindex="0" role="button" aria-label="Aide : Nom">?<span class="tip" role="tooltip">
+        <b>Nom de l'abonné</b><br>
+        Sert à le reconnaître dans la liste ci-dessous et à le saluer dans les emails de confirmation
+        STOP/START (« Bonjour &lt;nom&gt; »). Prénom ou surnom, pas besoin qu'il soit unique.
+      </span></span>
+    </div>
+    <div class="flex items-center gap-2">
+      <input name="email" type="email" placeholder="email@example.com" required class="flex-1 min-w-0 border border-stone-300 rounded px-2 py-1.5">
+      <span class="help" tabindex="0" role="button" aria-label="Aide : Email">?<span class="tip" role="tooltip">
+        <b>Adresse email de l'abonné</b><br>
+        Reçoit les alertes quand un créneau s'ouvre (si la case <b>Email</b> est cochée).
+        Une adresse ne peut être utilisée qu'une seule fois.<br>
+        Chaque alerte contient un token : l'abonné peut se désabonner tout seul en envoyant un
+        email dont l'objet est <code>STOP &lt;token&gt;</code> (et <code>START &lt;token&gt;</code> pour revenir).
+      </span></span>
+    </div>
+    <div class="flex items-center gap-2 sm:col-span-2">
+      <input name="gchat_webhook" placeholder="https://chat.googleapis.com/v1/spaces/… (optionnel)" class="flex-1 min-w-0 border border-stone-300 rounded px-2 py-1.5 font-mono text-sm">
+      <span class="help" tabindex="0" role="button" aria-label="Aide : Webhook Google Chat">?<span class="tip" role="tooltip">
+        <b>Webhook Google Chat (optionnel)</b><br>
+        Pour recevoir les alertes dans un <b>espace</b> Google Chat en plus (ou à la place) de l'email.
+        Laisser vide sinon.<br><br>
+        <b>Qui le crée ?</b> La personne qui veut recevoir les alertes, depuis un espace dont elle est
+        membre. Il faut un compte <b>Google Workspace</b> (pro / établissement) : les comptes Gmail
+        personnels ne peuvent pas créer de webhook, et l'admin Workspace peut l'avoir désactivé.<br><br>
+        <b>Où le trouver ?</b>
+        <ol>
+          <li>Ouvrir <a href="https://chat.google.com" target="_blank" rel="noopener noreferrer">chat.google.com</a> et l'espace qui doit recevoir les alertes (un espace, pas une conversation privée).</li>
+          <li>Cliquer sur le nom de l'espace en haut → <b>Applications et intégrations</b>.</li>
+          <li><b>Ajouter des webhooks</b> → nom (ex. « Lycée Hôtelier ») → <b>Enregistrer</b>.</li>
+          <li>Copier l'URL (elle commence par <code>https://chat.googleapis.com/v1/spaces/</code>) et la coller ici.</li>
+        </ol>
+        ⚠ Cette URL est un secret : toute personne qui la possède peut écrire dans l'espace.
+        Ne la partagez qu'ici.
+        <a href="https://developers.google.com/workspace/chat/quickstart/webhooks" target="_blank" rel="noopener noreferrer">Doc Google</a>
+      </span></span>
+    </div>
+    <div class="flex items-center gap-2">
+      <select name="preference" class="flex-1 min-w-0 border border-stone-300 rounded px-2 py-1.5">
+        <option value="both">Déjeuner + Dîner</option>
+        <option value="lunch">Déjeuner uniquement</option>
+        <option value="dinner">Dîner uniquement</option>
+      </select>
+      <span class="help" tabindex="0" role="button" aria-label="Aide : Préférence">?<span class="tip" role="tooltip">
+        <b>Services surveillés</b><br>
+        Pour quels services l'abonné est prévenu quand une réservation s'ouvre :
+        le déjeuner seulement, le dîner seulement, ou les deux.
+      </span></span>
+    </div>
     <div class="flex items-center gap-4 text-sm">
       <label class="flex items-center gap-1"><input type="checkbox" name="notify_email" checked> Email</label>
       <label class="flex items-center gap-1"><input type="checkbox" name="notify_gchat" checked> GChat</label>
-      <label class="flex items-center gap-1"><input type="checkbox" name="daily_reminder" checked> Rappel quotidien</label>
+      <span class="help ml-auto" tabindex="0" role="button" aria-label="Aide : Canaux">?<span class="tip" role="tooltip">
+        <b>Canaux de notification</b><br>
+        <b>Email</b> : alerte envoyée à l'adresse ci-dessus.<br>
+        <b>GChat</b> : alerte postée dans l'espace Google Chat — ne sert que si un webhook est renseigné.<br>
+        Les deux peuvent être cochés. Utilisez « Tester notification » dans la fiche de l'abonné pour vérifier.
+      </span></span>
     </div>
     <button class="sm:col-span-2 bg-amber-500 text-white py-2 rounded hover:bg-amber-600">Ajouter</button>
   </form>
@@ -37,7 +125,7 @@
 
 <section class="bg-white border border-stone-200 rounded-lg p-4">
   <h2 class="font-semibold mb-3">Utilisateurs</h2>
-  <div id="users-table" class="text-sm">
+  <div id="users-list" class="space-y-2 text-sm">
     <p class="text-stone-500">Chargement…</p>
   </div>
 </section>
@@ -50,7 +138,17 @@ const TOKEN_KEY = 'admin-token';
 function getToken() { return localStorage.getItem(TOKEN_KEY) || ''; }
 function saveToken() {
   const v = document.getElementById('admin-token').value.trim();
-  if (v) { localStorage.setItem(TOKEN_KEY, v); document.getElementById('admin-token').value=''; alert('Token sauvegardé.'); refresh(); }
+  if (v) {
+    localStorage.setItem(TOKEN_KEY, v);
+    document.getElementById('admin-token').value = '';
+    alert('Token sauvegardé.');
+    loadAdminSettings().then(refresh).catch((e) => {
+      const fb = document.getElementById('polling-feedback');
+      fb.textContent = 'Erreur: ' + e.message;
+      fb.className = 'text-xs mt-2 text-red-600';
+      refresh();
+    });
+  }
 }
 
 async function api(path, opts={}) {
@@ -63,54 +161,180 @@ async function api(path, opts={}) {
 
 function escape(s) { return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
+function setPollingSummary(minutes) {
+  const el = document.getElementById('polling-summary');
+  if (!el || !minutes) return;
+  const lookahead = {{ settings.lookahead_months|tojson }};
+  el.textContent = `Polling toutes les ${minutes} min · ${lookahead} mois en avant`;
+}
+
+async function loadAdminSettings() {
+  const settings = await api('/api/admin/settings');
+  document.getElementById('scrape-interval-minutes').value = settings.scrape_interval_minutes;
+  setPollingSummary(settings.scrape_interval_minutes);
+  return settings;
+}
+
+const PREF_LABELS = { lunch: 'Déjeuner', dinner: 'Dîner', both: 'Déjeuner + Dîner', any: 'Tous' };
+const expandedUsers = new Set();
+let cachedUsers = [];
+
+function userSummary(u) {
+  const flags = [
+    u.notify_email ? 'Email' : null,
+    u.notify_gchat ? 'GChat' : null,
+  ].filter(Boolean).join(' · ') || 'Aucun canal';
+  const status = u.enabled
+    ? '<span class="text-green-700">● Actif</span>'
+    : '<span class="text-stone-400">○ Inactif</span>';
+  return `
+    <div class="flex flex-wrap items-center gap-3 cursor-pointer" onclick="toggleExpand(${u.id})">
+      <div class="flex-1 min-w-[200px]">
+        <div class="font-medium">${escape(u.name)} <span class="text-stone-400 text-xs">#${u.id}</span></div>
+        <div class="font-mono text-xs text-stone-500">${escape(u.email)}</div>
+      </div>
+      <div class="text-xs text-stone-600">${escape(PREF_LABELS[u.preference] || u.preference)}</div>
+      <div class="text-xs text-stone-600">${flags}</div>
+      <div class="text-xs">${status}</div>
+      <button class="text-xs text-amber-600 hover:underline" onclick="event.stopPropagation(); toggleExpand(${u.id})">
+        ${expandedUsers.has(u.id) ? 'Fermer' : 'Modifier'}
+      </button>
+    </div>
+  `;
+}
+
+function userEditor(u) {
+  const sel = (v) => v === u.preference ? 'selected' : '';
+  const chk = (v) => v ? 'checked' : '';
+  return `
+    <form class="mt-3 pt-3 border-t border-stone-200 grid sm:grid-cols-2 gap-3" onsubmit="saveUser(event, ${u.id})">
+      <label class="text-xs">
+        <span class="block text-stone-500 mb-1">Nom</span>
+        <input name="name" value="${escape(u.name)}" required class="w-full border border-stone-300 rounded px-2 py-1.5">
+      </label>
+      <label class="text-xs">
+        <span class="block text-stone-500 mb-1">Email</span>
+        <input name="email" type="email" value="${escape(u.email)}" required class="w-full border border-stone-300 rounded px-2 py-1.5 font-mono">
+      </label>
+      <label class="text-xs sm:col-span-2">
+        <span class="block text-stone-500 mb-1">Webhook Google Chat</span>
+        <input name="gchat_webhook" value="${escape(u.gchat_webhook || '')}" placeholder="https://chat.googleapis.com/..." class="w-full border border-stone-300 rounded px-2 py-1.5 font-mono">
+      </label>
+      <label class="text-xs">
+        <span class="block text-stone-500 mb-1">Préférence service</span>
+        <select name="preference" class="w-full border border-stone-300 rounded px-2 py-1.5">
+          <option value="both" ${sel('both')}>Déjeuner + Dîner</option>
+          <option value="lunch" ${sel('lunch')}>Déjeuner uniquement</option>
+          <option value="dinner" ${sel('dinner')}>Dîner uniquement</option>
+          <option value="any" ${sel('any')}>Tous (alias)</option>
+        </select>
+      </label>
+      <div class="text-xs flex flex-wrap items-center gap-4 sm:pt-5">
+        <label class="flex items-center gap-1"><input type="checkbox" name="notify_email" ${chk(u.notify_email)}> Email</label>
+        <label class="flex items-center gap-1"><input type="checkbox" name="notify_gchat" ${chk(u.notify_gchat)}> GChat</label>
+        <label class="flex items-center gap-1"><input type="checkbox" name="enabled" ${chk(u.enabled)}> Actif</label>
+      </div>
+      <div class="text-xs sm:col-span-2">
+        <div class="block text-stone-500 mb-1">Token STOP/START</div>
+        <div class="flex items-center gap-2">
+          <code class="bg-stone-100 px-2 py-1 rounded">${escape(u.command_token)}</code>
+          <button type="button" onclick="regen(${u.id})" class="text-stone-600 hover:underline">Régénérer</button>
+          <span class="text-stone-400">Envoyer « STOP ${escape(u.command_token)} » par email pour se désabonner.</span>
+        </div>
+      </div>
+      <div class="sm:col-span-2 flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-stone-100">
+        <div class="flex gap-2">
+          <button type="submit" class="bg-amber-500 text-white px-3 py-1.5 rounded hover:bg-amber-600 text-xs">Enregistrer</button>
+          <button type="button" onclick="toggleExpand(${u.id})" class="text-xs text-stone-600 hover:underline">Annuler</button>
+        </div>
+        <div class="flex gap-3">
+          <button type="button" onclick="testNotif(${u.id})" class="text-xs text-amber-600 hover:underline">Tester notification</button>
+          <button type="button" onclick="del(${u.id})" class="text-xs text-red-600 hover:underline">Supprimer</button>
+        </div>
+      </div>
+      <div class="sm:col-span-2 text-xs feedback"></div>
+    </form>
+  `;
+}
+
+function renderUsers() {
+  const list = document.getElementById('users-list');
+  if (!cachedUsers.length) {
+    list.innerHTML = '<p class="text-stone-500">Aucun utilisateur.</p>';
+    return;
+  }
+  list.innerHTML = cachedUsers.map((u) => `
+    <div class="border border-stone-200 rounded-lg p-3 ${u.enabled ? '' : 'bg-stone-50'}" data-user-id="${u.id}">
+      ${userSummary(u)}
+      ${expandedUsers.has(u.id) ? userEditor(u) : ''}
+    </div>
+  `).join('');
+}
+
+function toggleExpand(id) {
+  if (expandedUsers.has(id)) expandedUsers.delete(id);
+  else expandedUsers.add(id);
+  renderUsers();
+}
+
 async function refresh() {
-  const tbl = document.getElementById('users-table');
+  const list = document.getElementById('users-list');
   try {
-    const users = await api('/api/users');
-    if (!users.length) { tbl.innerHTML = '<p class="text-stone-500">Aucun utilisateur.</p>'; return; }
-    let h = '<table class="w-full"><thead class="text-xs uppercase text-stone-500 border-b"><tr>'
-      + '<th class="text-left py-2">Nom</th><th class="text-left">Email</th><th>Préf.</th>'
-      + '<th>Email</th><th>GChat</th><th>Rappel</th><th>Actif</th>'
-      + '<th class="text-left">Token STOP/START</th><th></th></tr></thead><tbody>';
-    for (const u of users) {
-      h += `<tr class="border-b last:border-0">
-        <td class="py-2">${escape(u.name)}</td>
-        <td class="font-mono text-xs">${escape(u.email)}</td>
-        <td class="text-center">${escape(u.preference)}</td>
-        <td class="text-center">${u.notify_email ? '✓' : '·'}</td>
-        <td class="text-center">${u.notify_gchat ? '✓' : '·'}</td>
-        <td class="text-center">${u.daily_reminder ? '✓' : '·'}</td>
-        <td class="text-center">${u.enabled ? '✓' : '✗'}</td>
-        <td class="font-mono text-xs">
-          <span title="Envoyez 'STOP ${escape(u.command_token)}' depuis n'importe quelle adresse pour arrêter">${escape(u.command_token)}</span>
-          <button onclick="regen(${u.id})" class="ml-1 text-stone-400 hover:text-stone-700" title="Régénérer">↻</button>
-        </td>
-        <td class="text-right">
-          <button onclick="testNotif(${u.id})" class="text-xs text-amber-600 hover:underline">Tester</button>
-          <button onclick="toggleEnabled(${u.id}, ${!u.enabled})" class="text-xs text-stone-600 hover:underline ml-2">
-            ${u.enabled ? 'Désactiver' : 'Activer'}
-          </button>
-          <button onclick="del(${u.id})" class="text-xs text-red-600 hover:underline ml-2">Supprimer</button>
-        </td>
-      </tr>`;
-    }
-    h += '</tbody></table>';
-    tbl.innerHTML = h;
+    cachedUsers = await api('/api/users');
+    renderUsers();
   } catch (e) {
-    tbl.innerHTML = `<p class="text-red-600 text-sm">Erreur: ${escape(e.message)}</p>`;
+    list.innerHTML = `<p class="text-red-600 text-sm">Erreur: ${escape(e.message)}</p>`;
   }
 }
+
+async function saveUser(ev, id) {
+  ev.preventDefault();
+  const form = ev.target;
+  const fb = form.querySelector('.feedback');
+  const fd = new FormData(form);
+  const body = {
+    name: fd.get('name'),
+    email: fd.get('email'),
+    gchat_webhook: (fd.get('gchat_webhook') || '').trim() || null,
+    preference: fd.get('preference'),
+    notify_email: fd.get('notify_email') === 'on',
+    notify_gchat: fd.get('notify_gchat') === 'on',
+    enabled: fd.get('enabled') === 'on',
+  };
+  try {
+    await api(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
+    fb.textContent = 'Enregistré.';
+    fb.className = 'sm:col-span-2 text-xs feedback text-green-600';
+    await refresh();
+  } catch (e) {
+    fb.textContent = 'Erreur: ' + e.message;
+    fb.className = 'sm:col-span-2 text-xs feedback text-red-600';
+  }
+}
+
+document.getElementById('polling-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fb = document.getElementById('polling-feedback');
+  const minutes = Number(document.getElementById('scrape-interval-minutes').value);
+  try {
+    const res = await api('/api/admin/settings', {
+      method: 'PUT',
+      body: JSON.stringify({ scrape_interval_minutes: minutes }),
+    });
+    setPollingSummary(res.scrape_interval_minutes);
+    fb.textContent = `Polling mis à jour: toutes les ${res.scrape_interval_minutes} min.`;
+    fb.className = 'text-xs mt-2 text-green-600';
+  } catch (err) {
+    fb.textContent = 'Erreur: ' + err.message;
+    fb.className = 'text-xs mt-2 text-red-600';
+  }
+});
 
 async function testNotif(id) {
   try {
     const res = await api(`/api/users/${id}/test-notification`, { method: 'POST', body: '{}' });
     alert("Test envoyé.\n" + JSON.stringify(res, null, 2));
   } catch (e) { alert("Erreur: " + e.message); }
-}
-
-async function toggleEnabled(id, enabled) {
-  try { await api(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }); refresh(); }
-  catch (e) { alert("Erreur: " + e.message); }
 }
 
 async function del(id) {
@@ -136,7 +360,6 @@ document.getElementById('create-form').addEventListener('submit', async (e) => {
     preference: fd.get('preference'),
     notify_email: fd.get('notify_email') === 'on',
     notify_gchat: fd.get('notify_gchat') === 'on',
-    daily_reminder: fd.get('daily_reminder') === 'on',
   };
   try {
     await api('/api/users', { method: 'POST', body: JSON.stringify(body) });
@@ -150,6 +373,11 @@ document.getElementById('create-form').addEventListener('submit', async (e) => {
   }
 });
 
-refresh();
+loadAdminSettings().then(refresh).catch((e) => {
+  const fb = document.getElementById('polling-feedback');
+  fb.textContent = 'Erreur: ' + e.message;
+  fb.className = 'text-xs mt-2 text-red-600';
+  refresh();
+});
 </script>
 {% endblock %}
