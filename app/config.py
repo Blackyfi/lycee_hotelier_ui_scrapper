@@ -7,6 +7,11 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _default_data_dir() -> Path:
+    # Default to the repo-local data directory for non-Docker runs.
+    return Path(__file__).resolve().parent.parent / "data"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -19,8 +24,14 @@ class Settings(BaseSettings):
     admin_token: str = "change-me-please"
     log_level: str = "INFO"
     tz: str = "Europe/Paris"
+    public_base_url: str = ""
 
-    data_dir: Path = Path("/data")
+    data_dir: Path = Field(default_factory=_default_data_dir)
+
+    # SQLCipher key: 64 hex chars (raw 256-bit key). Read from the file (Docker secret)
+    # unless DB_KEY is set directly. The app refuses to start without it.
+    db_key_file: Path = Path("/run/secrets/db_key")
+    db_key: str = ""
 
     scrape_interval_minutes: int = 5
     lookahead_months: int = 6
@@ -33,7 +44,7 @@ class Settings(BaseSettings):
     gmail_app_password: str = ""
     gmail_from_name: str = "Lycée Hôtelier Watcher"
 
-    daily_reminder_hour: int = 8
+    daily_menu_scrape_hour: int = 8
 
     notifications_dry_run: bool = False
 
@@ -53,10 +64,9 @@ class Settings(BaseSettings):
     bootstrap_user_gchat_webhook: str = ""
     bootstrap_user_preference: str = "both"
 
-    menus_index_url: str = "https://www.hoteloccitanietoulouse.com/agenda/menus/"
+    menus_index_url: str = "https://www.hoteloccitanietoulouse.com/agenda/do/tag/menus/"
     reservation_url: str = (
-        "https://www.covermanager.com/reserve/module_restaurant/"
-        "restaurant-restaurant-d-application-d-occitanie/french"
+        "https://www.covermanager.com/reserve/module_restaurant/restaurant-restaurant-d-application-d-occitanie/french"
     )
     site_root: str = "https://www.hoteloccitanietoulouse.com"
 
@@ -67,6 +77,13 @@ class Settings(BaseSettings):
     @property
     def menu_images_dir(self) -> Path:
         return self.data_dir / "menu_images"
+
+    @property
+    def dashboard_url(self) -> str | None:
+        base = self.public_base_url.strip().rstrip("/")
+        if not base:
+            return None
+        return f"{base}/"
 
 
 @lru_cache

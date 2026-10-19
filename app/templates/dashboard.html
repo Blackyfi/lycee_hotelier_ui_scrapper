@@ -14,7 +14,8 @@
     <div class="text-xs uppercase tracking-wide text-stone-500">Dernier scan réservations</div>
     <div class="mt-1 text-sm">
       {% if last_res %}
-        <span class="font-mono text-stone-700">{{ last_res.started_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC</span>
+        <span class="font-mono text-stone-700 js-paris-datetime"
+              data-iso="{{ browser_iso(last_res.started_at) }}">{{ last_res.started_at.strftime('%Y-%m-%d %H:%M:%S') }} UTC</span>
         {% if last_res.success %}
           <span class="ml-1 text-green-600">✓</span>
         {% else %}
@@ -24,6 +25,7 @@
           {{ last_res.n_yellow_days }} jours jaunes · {{ last_res.n_new_slots }} nouveaux ·
           {{ last_res.n_closed_slots }} fermés · {{ last_res.duration_ms or 0 }} ms
         </div>
+        <div class="text-xs text-stone-500 mt-1">Heure affichée : Europe/Paris (CET/CEST).</div>
       {% else %}
         <span class="text-stone-400">aucun scan encore</span>
       {% endif %}
@@ -90,7 +92,9 @@
             <div class="mt-2 text-xs text-stone-500">Heures à confirmer sur la page de réservation</div>
           {% endif %}
           <div class="mt-2 text-[11px] text-stone-500">
-            Détecté: {{ s.first_seen_at.strftime('%Y-%m-%d %H:%M') }} UTC
+            Détecté:
+            <span class="js-paris-datetime"
+                  data-iso="{{ browser_iso(s.first_seen_at) }}">{{ s.first_seen_at.strftime('%Y-%m-%d %H:%M') }} UTC</span>
           </div>
         </div>
       {% endfor %}
@@ -103,7 +107,32 @@
     <h2 class="text-lg font-semibold">Menu de la semaine</h2>
     <a href="/menus" class="text-sm text-amber-600 hover:underline">Voir tous les menus</a>
   </div>
-  {% if current_menu %}
+  {% if upcoming_menu %}
+    <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      {% for day in upcoming_menu %}
+        <div class="border border-stone-200 rounded-md p-3 text-sm">
+          <div class="font-semibold mb-1">{{ day.label }}</div>
+          {% for key, label in [('lunch', 'Déjeuner'), ('dinner', 'Dîner')] %}
+            {% set m = day[key] %}
+            <div class="mt-1">
+              <span class="text-xs uppercase tracking-wide text-stone-500">{{ label }}</span>
+              {% if m %}
+                <ul class="list-disc pl-4 text-stone-700">
+                  {% for dish in m.dishes %}<li>{{ dish }}</li>{% endfor %}
+                </ul>
+              {% else %}
+                <div class="text-stone-400">Pas de service</div>
+              {% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      {% endfor %}
+    </div>
+    {% set src = (upcoming_menu[0].lunch or upcoming_menu[0].dinner).source_url %}
+    <div class="text-xs mt-3">
+      <a href="{{ src }}" target="_blank" rel="noopener" class="text-amber-600 hover:underline">Menu complet ↗</a>
+    </div>
+  {% elif current_menu %}
     <div class="text-sm text-stone-600 mb-2">
       <a href="{{ current_menu.page_url }}" target="_blank" class="hover:underline">
         {{ current_menu.title }} ↗
@@ -127,6 +156,25 @@
 
 {% block scripts %}
 <script>
+  const parisDateTime = new Intl.DateTimeFormat('fr-FR', {
+    timeZone: 'Europe/Paris',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+
+  function hydrateParisTimes() {
+    document.querySelectorAll('.js-paris-datetime').forEach((el) => {
+      const iso = el.dataset.iso;
+      if (!iso) return;
+      el.textContent = parisDateTime.format(new Date(iso));
+    });
+  }
+
   async function triggerScrape(kind) {
     const fb = document.getElementById('scrape-feedback');
     const url = kind === 'menus' ? '/api/scrape/menus' : '/api/scrape/reservations';
@@ -144,5 +192,7 @@
       fb.textContent = "Erreur: " + e;
     }
   }
+
+  hydrateParisTimes();
 </script>
 {% endblock %}

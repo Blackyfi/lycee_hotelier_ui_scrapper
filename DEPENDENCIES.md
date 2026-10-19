@@ -23,7 +23,7 @@ license. SPDX identifiers are used where possible.
 | pydantic-settings   | 2.7.0      | MIT                 | `.env` → settings binding.                                         |
 | sqlalchemy          | 2.0.36     | MIT                 | ORM + engine for SQLite persistence.                               |
 | alembic             | 1.14.0     | MIT                 | DB migrations (reserved — current schema uses `create_all`).       |
-| apscheduler         | 3.11.0     | MIT                 | Background interval / cron jobs (poll, daily reminders).           |
+| apscheduler         | 3.11.0     | MIT                 | Background interval / cron jobs (reservation poll, daily menu scrape). |
 | playwright          | 1.49.1     | Apache-2.0          | Headless Chromium for the Angular calendar (covermanager).         |
 | httpx               | 0.28.1     | BSD-3-Clause        | HTTP client (menu scraping, GChat webhook).                        |
 | beautifulsoup4      | 4.12.3     | MIT                 | HTML parsing for the menu listing pages.                           |

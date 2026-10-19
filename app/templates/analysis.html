@@ -7,6 +7,7 @@
 
 {% block content %}
 <h1 class="text-2xl font-semibold mb-4">Analyse</h1>
+<p class="text-sm text-stone-500 mb-6">Heures affichées : Europe/Paris (CET/CEST).</p>
 
 <div class="grid md:grid-cols-2 gap-4 mb-6">
   <div class="bg-white border border-stone-200 rounded-lg p-4">
@@ -39,7 +40,33 @@
 <script>
 async function j(p) { const r = await fetch(p); return r.ok ? r.json() : []; }
 
-function fmtTime(iso) { return iso ? new Date(iso).toLocaleString() : ''; }
+const PARIS_TIMEZONE = 'Europe/Paris';
+const parisDateTime = new Intl.DateTimeFormat('fr-FR', {
+  timeZone: PARIS_TIMEZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+});
+
+function fmtTime(iso, includeZone = false) {
+  if (!iso) return '';
+  const label = parisDateTime.format(new Date(iso));
+  return includeZone ? `${label} ${PARIS_TIMEZONE}` : label;
+}
+function fmtParisDay(iso) {
+  return iso
+    ? new Intl.DateTimeFormat('fr-CA', {
+        timeZone: PARIS_TIMEZONE,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(new Date(iso))
+    : '';
+}
 
 (async function init() {
   const runs = await j('/api/scrape-runs?limit=200&kind=reservations');
@@ -49,7 +76,7 @@ function fmtTime(iso) { return iso ? new Date(iso).toLocaleString() : ''; }
   new Chart(document.getElementById('scrapesChart'), {
     type: 'bar',
     data: {
-      labels: runs.map(r => new Date(r.started_at).toLocaleString()),
+      labels: runs.map(r => fmtTime(r.started_at)),
       datasets: [
         { label: 'Jours jaunes', data: runs.map(r => r.n_yellow_days), backgroundColor: '#f59e0b' },
         { label: 'Nouveaux', data: runs.map(r => r.n_new_slots), backgroundColor: '#10b981' },
@@ -63,7 +90,7 @@ function fmtTime(iso) { return iso ? new Date(iso).toLocaleString() : ''; }
   new Chart(document.getElementById('durationChart'), {
     type: 'line',
     data: {
-      labels: runs.map(r => new Date(r.started_at).toLocaleString()),
+      labels: runs.map(r => fmtTime(r.started_at)),
       datasets: [{
         label: 'Durée (ms)', data: runs.map(r => r.duration_ms || 0),
         borderColor: '#6366f1', backgroundColor: 'rgba(99,102,241,.15)', tension: 0.25, fill: true,
@@ -76,7 +103,7 @@ function fmtTime(iso) { return iso ? new Date(iso).toLocaleString() : ''; }
   const slots = await j('/api/slots?only_available=false&since_days=180');
   const byDay = {};
   for (const s of slots) {
-    const d = s.first_seen_at.slice(0, 10);
+    const d = fmtParisDay(s.first_seen_at);
     byDay[d] = (byDay[d] || 0) + 1;
   }
   const days = Object.keys(byDay).sort();
@@ -92,11 +119,11 @@ function fmtTime(iso) { return iso ? new Date(iso).toLocaleString() : ''; }
   // Runs table
   const tbl = document.getElementById('runs-table');
   let h = '<table class="w-full"><thead class="text-stone-500 border-b"><tr>'
-    + '<th class="text-left py-1">Démarré</th><th>Type</th><th>OK</th><th>Jaunes</th>'
+    + '<th class="text-left py-1">Démarré (Europe/Paris)</th><th>Type</th><th>OK</th><th>Jaunes</th>'
     + '<th>Nouveaux</th><th>Fermés</th><th>Durée</th><th class="text-left">Erreur</th></tr></thead><tbody>';
   for (const r of [...runs].reverse()) {
     h += `<tr class="border-b last:border-0">
-      <td class="py-1 font-mono">${fmtTime(r.started_at)}</td>
+      <td class="py-1 font-mono">${fmtTime(r.started_at, true)}</td>
       <td class="text-center">${r.kind}</td>
       <td class="text-center">${r.success ? '✓' : '✗'}</td>
       <td class="text-center">${r.n_yellow_days}</td>

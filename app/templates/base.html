@@ -36,7 +36,7 @@
         <a href="/users" class="hover:text-amber-600 {% if request.url.path == '/users' %}text-amber-600 font-medium{% endif %}">Utilisateurs</a>
         <a href="/analysis" class="hover:text-amber-600 {% if request.url.path == '/analysis' %}text-amber-600 font-medium{% endif %}">Analyse</a>
       </div>
-      <div class="ml-auto text-xs text-stone-500">
+      <div id="polling-summary" class="ml-auto text-xs text-stone-500">
         Polling toutes les {{ settings.scrape_interval_minutes }} min · {{ settings.lookahead_months }} mois en avant
       </div>
     </nav>

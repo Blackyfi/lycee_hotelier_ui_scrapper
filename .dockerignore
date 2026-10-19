@@ -1,0 +1,29 @@
+# Version control
+.git
+.gitignore
+
+# Secrets — never bake into image layers
+.env
+.env.*
+
+# Runtime-mounted volumes (large, not needed at build time)
+data/
+runs/
+tls/
+
+# Dev-only tooling
+requirements-dev.txt
+pyproject.toml
+.ruff_cache/
+.mypy_cache/
+__pycache__/
+*.py[cod]
+
+# Docs / CI / editor artefacts
+*.md
+.claude/
+.DS_Store
+Thumbs.db
+
+# Database key — mounted at runtime as a Docker secret, never baked in
+secrets/

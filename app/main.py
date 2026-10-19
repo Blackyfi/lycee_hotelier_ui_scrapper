@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
-from pathlib import Path
 
 from .config import get_settings
 from .db import init_db
@@ -38,6 +38,10 @@ app = FastAPI(
     description="Watches the Restaurant d'Application reservation calendar and notifies on opening.",
     version="0.1.0",
     lifespan=lifespan,
+    # No public API explorer / schema: it maps every admin endpoint for anyone on the LAN.
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 
 _static_dir = Path(__file__).resolve().parent / "static"
