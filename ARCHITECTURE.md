@@ -20,7 +20,6 @@ erDiagram
         string email UK
         string gchat_webhook "nullable"
         enum preference "lunch|dinner|both|any"
-        bool daily_reminder
         bool notify_email
         bool notify_gchat
         bool enabled
@@ -43,7 +42,7 @@ erDiagram
         int id PK
         int user_id FK
         int slot_id FK
-        enum kind "open|reminder"
+        enum kind "open"
         string channel "email|gchat"
         datetime sent_at
         date sent_day
@@ -87,8 +86,8 @@ erDiagram
 **Notes**
 - `(slot_date, service)` is unique on `AVAILABLE_SLOT` — one row per
   date×service, lifecycled in place rather than re-inserted.
-- `NOTIFICATION_SENT` is the dedup ledger: the daily-reminder job checks
-  `(user_id, slot_id, kind=REMINDER, sent_day=today)` before sending.
+- `NOTIFICATION_SENT` is the audit ledger of every `OPEN` notification sent,
+  per `(user_id, slot_id, channel)`.
 - `SCRAPE_RUN`, `MENU`, `RESTAURANT_INFO` are standalone — no FKs.
 
 ---
@@ -170,7 +169,7 @@ classDiagram
     APIRouter --> DBSession
     WebRouter --> DBSession
     Scheduler --> Dispatcher : every SCRAPE_INTERVAL_MINUTES
-    Scheduler --> MenusScraper : daily @ DAILY_REMINDER_HOUR
+    Scheduler --> MenusScraper : daily @ DAILY_MENU_SCRAPE_HOUR
     Scheduler --> InboxPoller : every IMAP_POLL_INTERVAL_MINUTES
     Dispatcher --> ReservationsScraper
     Dispatcher --> DBSession
@@ -206,7 +205,7 @@ stateDiagram-v2
     NewlyOpen --> StillOpen : next tick, still yellow<br/>last_seen_at refreshed
     NewlyOpen --> Closed : disappeared from scrape<br/>closed_at = now
 
-    StillOpen --> StillOpen : seen again<br/>(daily REMINDER once per UTC day,<br/>only if user.daily_reminder)
+    StillOpen --> StillOpen : seen again<br/>last_seen_at refreshed<br/>(no notification)
     StillOpen --> Closed : disappeared from scrape<br/>is_currently_available = false<br/>closed_at = now
 
     Closed --> NewlyOpen : reappears later<br/>closed_at = NULL<br/>is_currently_available = true
@@ -225,9 +224,9 @@ stateDiagram-v2
     end note
 ```
 
-**Reminder dedup:** the `Closed → NewlyOpen` transition resets the day
-counter, so a slot that closed and reopened the same day can re-trigger an
-OPEN notif but the daily REMINDER is still capped to once per `sent_day`.
+**Reopening:** the `Closed → NewlyOpen` transition makes a slot eligible for a
+fresh OPEN notification, so a slot that closed and reopened later can notify
+matching users again.
 
 ---
 
@@ -254,13 +253,8 @@ flowchart TD
 
     NewOpen -- yes --> BuildOpen[Build NotifPayload<br/>• kind=OPEN<br/>• all slots batched<br/>• booking + maps URL<br/>• unsubscribe token]
     BuildOpen --> SendOpen[send_email + send_gchat<br/>insert NotificationSent rows]
-    NewOpen -- no --> Reminder
-    SendOpen --> Reminder{daily_reminder + still-open<br/>+ not sent today?}
-
-    Reminder -- yes --> BuildRem[Build NotifPayload<br/>kind=REMINDER, batched]
-    BuildRem --> SendRem[send_email + send_gchat<br/>insert NotificationSent rows]
-    Reminder -- no --> NextUser
-    SendRem --> NextUser[next user]
+    NewOpen -- no --> NextUser
+    SendOpen --> NextUser[next user]
     NextUser -.-> Loop
     NextUser --> Persist([Insert ScrapeRun row<br/>release lock])
     Skip --> Persist
